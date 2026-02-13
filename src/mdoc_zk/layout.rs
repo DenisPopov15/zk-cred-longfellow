@@ -279,6 +279,104 @@ impl InputLayout {
             mac_prover_key_shares: mac_prover_key_shares.try_into().unwrap(),
         }
     }
+
+    /// Check that every hash input wire that must be a bit (0 or 1) is actually 0 or 1.
+    /// Returns an error with the region name and wire index of the first invalid wire.
+    #[cfg(test)]
+    pub(super) fn validate_hash_input_bits(
+        &self,
+        input: &[Field2_128],
+    ) -> Result<(), anyhow::Error> {
+        use crate::fields::FieldElement;
+        fn is_bit(f: &Field2_128) -> bool {
+            bool::from(f.is_zero()) || *f == Field2_128::ONE
+        }
+        fn check_region(
+            name: &str,
+            start: usize,
+            slice: &[Field2_128],
+        ) -> Result<(), anyhow::Error> {
+            for (i, w) in slice.iter().enumerate() {
+                if !is_bit(w) {
+                    return Err(anyhow::anyhow!(
+                        "hash input region \"{}\" wire {} (global index {}) is not a bit: {:?}",
+                        name,
+                        i,
+                        start + i,
+                        w
+                    ));
+                }
+            }
+            Ok(())
+        }
+        let mut idx = 0;
+        // statement: implicit_one (1)
+        check_region("implicit_one", idx, &input[idx..idx + 1])?;
+        idx += 1;
+        // attribute_inputs (each attribute: CBOR data + length, all bits)
+        for _ in 0..self.attributes {
+            let len = AttributeInput::LENGTH;
+            check_region("attribute_input", idx, &input[idx..idx + len])?;
+            idx += len;
+        }
+        // time (20*8 bits)
+        let time_len = 20 * 8;
+        check_region("time", idx, &input[idx..idx + time_len])?;
+        idx += time_len;
+        // mac_tags (6 elements, not bits) — skip
+        idx += 3 * 2;
+        // mac_verifier_key_share (1 element, not bits) — skip
+        idx += 1;
+        // e_credential (256 bits)
+        check_region("e_credential", idx, &input[idx..idx + 256])?;
+        idx += 256;
+        // device_public_key_x (256 bits)
+        check_region("device_public_key_x", idx, &input[idx..idx + 256])?;
+        idx += 256;
+        // device_public_key_y (256 bits)
+        check_region("device_public_key_y", idx, &input[idx..idx + 256])?;
+        idx += 256;
+        // sha_256_block_count (8 bits)
+        check_region("sha_256_block_count", idx, &input[idx..idx + 8])?;
+        idx += 8;
+        // sha_256_input (bits)
+        check_region("sha_256_input", idx, &input[idx..idx + SHA_256_INPUT_WIRES])?;
+        idx += SHA_256_INPUT_WIRES;
+        // sha_256_witness_credential (BitPlucker packed, not raw bits) — skip
+        idx += SHA_256_CREDENTIAL_WITNESS_WIRES;
+        // CBOR offsets (12 bits each)
+        check_region("valid_from_offset", idx, &input[idx..idx + CBOR_OFFSET_BITS])?;
+        idx += CBOR_OFFSET_BITS;
+        check_region("valid_until_offset", idx, &input[idx..idx + CBOR_OFFSET_BITS])?;
+        idx += CBOR_OFFSET_BITS;
+        check_region("device_key_info_offset", idx, &input[idx..idx + CBOR_OFFSET_BITS])?;
+        idx += CBOR_OFFSET_BITS;
+        check_region("value_digests_offset", idx, &input[idx..idx + CBOR_OFFSET_BITS])?;
+        idx += CBOR_OFFSET_BITS;
+        // attribute witnesses: per-attribute sha_256_input (bits), then witness (skip), then 5*12 offset bits
+        for a in 0..usize::from(self.attributes) {
+            let attr_sha_len = 2 * 64 * 8;
+            check_region(
+                &format!("attribute_witness_{}_sha_256_input", a),
+                idx,
+                &input[idx..idx + attr_sha_len],
+            )?;
+            idx += attr_sha_len;
+            idx += 2 * Sha256BlockWitness::LENGTH; // skip witness
+            for (name, offset) in [
+                "digest_offset",
+                "cbor_data_offset",
+                "cbor_data_length",
+                "unused_offset",
+                "unused_length",
+            ] {
+                check_region(&format!("attribute_witness_{}_{}", a, name), idx, &input[idx..idx + CBOR_OFFSET_BITS])?;
+                idx += CBOR_OFFSET_BITS;
+            }
+        }
+        // mac_prover_key_shares (6 elements, not bits) — no check
+        Ok(())
+    }
 }
 
 /// Pointers to different parts of the signature circuit's public inputs.

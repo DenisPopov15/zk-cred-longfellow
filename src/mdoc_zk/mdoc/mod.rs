@@ -386,6 +386,69 @@ impl Deref for ByteString {
     }
 }
 
+/// Return the credential hash message (encoded Sig_structure) that the library would use for the given device response.
+/// For debugging and tests: compare with the message that was actually signed.
+pub fn credential_hash_message_bytes(
+    device_response: &[u8],
+) -> Result<Vec<u8>, anyhow::Error> {
+    let mdoc = parse_device_response(device_response)?;
+    let sig_structure = SigStructure {
+        body_protected: ByteString(mdoc.issuer_signature_protected_headers),
+        external_aad: ByteString(Vec::new()),
+        payload: ByteString(mdoc.issuer_signature_payload),
+    };
+    let mut message = Vec::new();
+    ciborium::into_writer(&sig_structure, &mut message)
+        .context("could not encode Sig_structure")?;
+    Ok(message)
+}
+
+/// Return the raw MSO bytes (decoded from tag-24 in the issuer payload) for the given device response.
+/// For debugging: compare with another mdoc's MSO bytes.
+pub fn mso_bytes_from_device_response(device_response: &[u8]) -> Result<Vec<u8>, anyhow::Error> {
+    let mdoc = parse_device_response(device_response)?;
+    let payload = &mdoc.issuer_signature_payload;
+    if payload.len() < 4 || payload[0] != 0xd8 || payload[1] != 0x18 {
+        return Err(anyhow!("issuer payload is not tag-24 encoded"));
+    }
+    let (len, start) = if payload[2] == 0x58 {
+        (payload[3] as usize, 4)
+    } else if payload[2] == 0x59 && payload.len() >= 5 {
+        let l = (payload[3] as usize) << 8 | (payload[4] as usize);
+        (l, 5)
+    } else {
+        return Err(anyhow!("issuer payload bstr length invalid"));
+    };
+    if payload.len() < start + len {
+        return Err(anyhow!("issuer payload shorter than MSO length"));
+    }
+    Ok(payload[start..start + len].to_vec())
+}
+
+/// Return MSO offset hints for debugging: value_digests offset and digest offset(s) for the given attributes.
+/// Useful to compare with a known-good mdoc (e.g. test vector).
+pub fn mso_offset_hints(
+    device_response: &[u8],
+    namespace: &str,
+    attribute_ids: &[&str],
+) -> Result<(usize, Vec<usize>), anyhow::Error> {
+    let mdoc = parse_device_response(device_response)?;
+    let attributes = find_attributes(&mdoc.attribute_preimages, namespace, attribute_ids)?;
+    let value_digests_offset = mdoc.mso_offsets.value_digests;
+    let digest_offsets: Vec<usize> = attributes
+        .iter()
+        .map(|a| {
+            mdoc.mso_offsets
+                .value_digests_items
+                .get(namespace)
+                .and_then(|m| m.get(&a.digest_id))
+                .copied()
+                .ok_or_else(|| anyhow!("digest offset for attribute {}", a.digest_id))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok((value_digests_offset, digest_offsets))
+}
+
 /// Compute the hash of the credential, for the issuer signature.
 ///
 /// This also returns the preimage of the hash, and writes SHA-256 witness values.

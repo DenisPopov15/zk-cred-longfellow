@@ -270,9 +270,11 @@ impl<FE: CodecFieldElement> Circuit<FE> {
             // expect that Q and Z are disjoint. We verify the latter in
             // roundtrip_circuit_test_vector.
             for gate_index in z_gate_indexes {
-                if !bool::from(gate_outputs[gate_index].is_zero()) {
+                let out = &gate_outputs[gate_index];
+                if !bool::from(out.is_zero()) {
                     return Err(anyhow!(
-                        "in-circuit assertion failed at layer {layer_index}, gate {gate_index}"
+                        "in-circuit assertion failed at layer {layer_index}, gate {gate_index} (output: {:?})",
+                        out
                     ));
                 }
             }

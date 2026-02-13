@@ -28,6 +28,9 @@ mod ec;
 mod layout;
 mod mdoc;
 pub mod prover;
+pub use mdoc::{
+    credential_hash_message_bytes, mso_bytes_from_device_response, mso_offset_hints,
+};
 mod sha256;
 pub mod verifier;
 
@@ -217,6 +220,30 @@ impl CircuitInputs {
         );
 
         // Set the padded SHA-256 input for the credential, skipping the known prefix.
+        #[cfg(test)]
+        {
+            // Step 2: assert credential message prefix matches circuit (ES256 protected, empty AAD, then payload byte-string header).
+            let prefix = &credential_hash_result.padded_input[..SHA_256_CREDENTIAL_KNOWN_PREFIX_BYTES];
+            const EXPECTED_PREFIX_17: [u8; 17] = [
+                0x84, 0x6a, 0x53, 0x69, 0x67, 0x6e, 0x61, 0x74, 0x75, 0x72, 0x65, 0x31, 0x43,
+                0xa1, 0x01, 0x26, 0x40,
+            ];
+            assert_eq!(
+                prefix.len(),
+                SHA_256_CREDENTIAL_KNOWN_PREFIX_BYTES,
+                "credential prefix length"
+            );
+            assert_eq!(
+                &prefix[..17],
+                &EXPECTED_PREFIX_17[..],
+                "credential hash message first 17 bytes must match circuit (array, Signature1, protected ES256, empty AAD)"
+            );
+            assert!(
+                prefix[17] == 0x58 || prefix[17] == 0x59,
+                "18th byte must be CBOR byte-string length byte (0x58/0x59), got {}",
+                prefix[17]
+            );
+        }
         byte_array_as_bits(
             &credential_hash_result.padded_input[SHA_256_CREDENTIAL_KNOWN_PREFIX_BYTES..],
             split_hash_input.sha_256_input,
@@ -385,6 +412,12 @@ impl CircuitInputs {
     /// Returns the input for the hash circuit.
     pub fn hash_input(&self) -> &[Field2_128] {
         &self.hash_input
+    }
+
+    /// Validates that every hash input wire that must be a bit is 0 or 1. For debugging only (test).
+    #[cfg(test)]
+    pub(super) fn validate_hash_input_bits(&self) -> Result<(), anyhow::Error> {
+        self.layout.validate_hash_input_bits(self.hash_input())
     }
 }
 

@@ -14,7 +14,7 @@ use crate::{
     transcript::{Transcript, TranscriptMode},
     witness::Witness,
 };
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 use std::io::Cursor;
 use wasm_bindgen::prelude::wasm_bindgen;
 
@@ -160,11 +160,21 @@ impl MdocZkProver {
         // Set remaining statement inputs for MAC verifier key share and MAC tags.
         inputs.update_macs(mac_verifier_key_share, mac_tags);
 
+        // Step 1: validate that all hash inputs that must be bits are 0 or 1 (debugging).
+        #[cfg(test)]
+        inputs
+            .validate_hash_input_bits()
+            .context("hash input bit validation (non-bit wire found)")?;
+
         // Evaluate the circuits to produce extended witnesses.
-        let hash_evaluation = self.hash_circuit.evaluate(&inputs.hash_input()[1..])?;
+        let hash_evaluation = self
+            .hash_circuit
+            .evaluate(&inputs.hash_input()[1..])
+            .context("hash circuit evaluation")?;
         let signature_evaluation = self
             .signature_circuit
-            .evaluate(&inputs.signature_input()[1..])?;
+            .evaluate(&inputs.signature_input()[1..])
+            .context("signature circuit evaluation")?;
 
         // Run Sumcheck and Ligero on hash circuit.
         initialize_transcript(
